@@ -1,6 +1,7 @@
 (function() {
+  var _ = typeof require == 'function' ? require('..') : window._;
 
-  module('Collections');
+  QUnit.module('Collections');
 
   test('each', function() {
     _.each([1, 2, 3], function(num, i) {
@@ -8,7 +9,7 @@
     });
 
     var answers = [];
-    _.each([1, 2, 3], function(num){ answers.push(num * this.multiplier);}, {multiplier : 5});
+    _.each([1, 2, 3], function(num){ answers.push(num * this.multiplier); }, {multiplier: 5});
     deepEqual(answers, [5, 10, 15], 'context object property accessed');
 
     answers = [];
@@ -16,11 +17,18 @@
     deepEqual(answers, [1, 2, 3], 'aliased as "forEach"');
 
     answers = [];
-    var obj = {one : 1, two : 2, three : 3};
+    var obj = {one: 1, two: 2, three: 3};
     obj.constructor.prototype.four = 4;
     _.each(obj, function(value, key){ answers.push(key); });
     deepEqual(answers, ['one', 'two', 'three'], 'iterating over objects works, and ignores the object prototype.');
     delete obj.constructor.prototype.four;
+
+    // ensure the each function is JITed
+    _(1000).times(function() { _.each([], function(){}); });
+    var count = 0;
+    obj = {1: 'foo', 2: 'bar', 3: 'baz'};
+    _.each(obj, function(){ count++; });
+    equal(count, 3, 'the fun should be called only 3 times');
 
     var answer = null;
     _.each([1, 2, 3], function(num, index, arr){ if (_.include(arr, num)) answer = true; });
@@ -35,26 +43,6 @@
     var a = [1, 2, 3];
     strictEqual(_.each(a, function(){}), a);
     strictEqual(_.each(null, function(){}), null);
-
-    var b = [1, 2, 3];
-    b.length = 100;
-    answers = 0;
-    _.each(b, function(){ ++answers; });
-    equal(answers, 100, 'enumerates [0, length)');
-
-
-    var collection = [1, 2, 3], count = 0;
-    _.each(collection, function() {
-      if (count < 10) collection.push(count++);
-    });
-    equal(count, 3);
-
-    collection = {a: 1, b: 2, c: 3};
-    count = 0;
-    _.each(collection, function() {
-      if (count < 10) collection[count] = count++;
-    });
-    equal(count, 3);
   });
 
   test('forEach', function() {
@@ -69,11 +57,99 @@
     });
   });
 
+  test('Iterating objects with sketchy length properties', function() {
+    var functions = [
+        'each', 'map', 'filter', 'find',
+        'some', 'every', 'max', 'min',
+        'groupBy', 'countBy', 'partition', 'indexBy'
+    ];
+    var reducers = ['reduce', 'reduceRight'];
+
+    var tricks = [
+      {length: '5'},
+      {
+        length: {
+          valueOf: _.constant(5)
+        }
+      },
+      {length: Math.pow(2, 53) + 1},
+      {length: Math.pow(2, 53)},
+      {length: null},
+      {length: -2},
+      {length: new Number(15)}
+    ];
+
+    expect(tricks.length * (functions.length + reducers.length + 4));
+
+    _.each(tricks, function(trick) {
+      var length = trick.length;
+      strictEqual(_.size(trick), 1, 'size on obj with length: ' + length);
+      deepEqual(_.toArray(trick), [length], 'toArray on obj with length: ' + length);
+      deepEqual(_.shuffle(trick), [length], 'shuffle on obj with length: ' + length);
+      deepEqual(_.sample(trick), length, 'sample on obj with length: ' + length);
+
+
+      _.each(functions, function(method) {
+        _[method](trick, function(val, key) {
+          strictEqual(key, 'length', method + ': ran with length = ' + val);
+        });
+      });
+
+      _.each(reducers, function(method) {
+        strictEqual(_[method](trick), trick.length, method);
+      });
+    });
+  });
+
+  test('Resistant to collection length and properties changing while iterating', function() {
+
+    var collection = [
+      'each', 'map', 'filter', 'find',
+      'some', 'every', 'max', 'min', 'reject',
+      'groupBy', 'countBy', 'partition', 'indexBy',
+      'reduce', 'reduceRight'
+    ];
+    var array = [
+      'findIndex', 'findLastIndex'
+    ];
+    var object = [
+      'mapObject', 'findKey', 'pick', 'omit'
+    ];
+
+    _.each(collection.concat(array), function(method) {
+      var sparseArray = [1, 2, 3];
+      sparseArray.length = 100;
+      var answers = 0;
+      _[method](sparseArray, function(){
+        ++answers;
+        return method === 'every' ? true : null;
+      }, {});
+      equal(answers, 100, method + ' enumerates [0, length)');
+
+      var growingCollection = [1, 2, 3], count = 0;
+      _[method](growingCollection, function() {
+        if (count < 10) growingCollection.push(count++);
+        return method === 'every' ? true : null;
+      }, {});
+      equal(count, 3, method + ' is resistant to length changes');
+    });
+
+    _.each(collection.concat(object), function(method) {
+      var changingObject = {0: 0, 1: 1}, count = 0;
+      _[method](changingObject, function(val) {
+        if (count < 10) changingObject[++count] = val + 1;
+        return method === 'every' ? true : null;
+      }, {});
+
+      equal(count, 2, method + ' is resistant to property changes');
+    });
+  });
+
   test('map', function() {
     var doubled = _.map([1, 2, 3], function(num){ return num * 2; });
     deepEqual(doubled, [2, 4, 6], 'doubled numbers');
 
-    var tripled = _.map([1, 2, 3], function(num){ return num * this.multiplier; }, {multiplier : 3});
+    var tripled = _.map([1, 2, 3], function(num){ return num * this.multiplier; }, {multiplier: 3});
     deepEqual(tripled, [3, 6, 9], 'tripled numbers with context');
 
     doubled = _([1, 2, 3]).map(function(num){ return num * 2; });
@@ -91,7 +167,7 @@
     }, [5]), [1], 'called with context');
 
     // Passing a property name like _.pluck.
-    var people = [{name : 'moe', age : 30}, {name : 'curly', age : 50}];
+    var people = [{name: 'moe', age: 30}, {name: 'curly', age: 50}];
     deepEqual(_.map(people, 'name'), ['moe', 'curly'], 'predicate string map to object properties');
   });
 
@@ -100,31 +176,29 @@
   });
 
   test('reduce', function() {
-    var sum = _.reduce([1, 2, 3], function(sum, num){ return sum + num; }, 0);
+    var sum = _.reduce([1, 2, 3], function(memo, num){ return memo + num; }, 0);
     equal(sum, 6, 'can sum up an array');
 
-    var context = {multiplier : 3};
-    sum = _.reduce([1, 2, 3], function(sum, num){ return sum + num * this.multiplier; }, 0, context);
+    var context = {multiplier: 3};
+    sum = _.reduce([1, 2, 3], function(memo, num){ return memo + num * this.multiplier; }, 0, context);
     equal(sum, 18, 'can reduce with a context object');
 
-    sum = _.inject([1, 2, 3], function(sum, num){ return sum + num; }, 0);
+    sum = _.inject([1, 2, 3], function(memo, num){ return memo + num; }, 0);
     equal(sum, 6, 'aliased as "inject"');
 
-    sum = _([1, 2, 3]).reduce(function(sum, num){ return sum + num; }, 0);
+    sum = _([1, 2, 3]).reduce(function(memo, num){ return memo + num; }, 0);
     equal(sum, 6, 'OO-style reduce');
 
-    sum = _.reduce([1, 2, 3], function(sum, num){ return sum + num; });
+    sum = _.reduce([1, 2, 3], function(memo, num){ return memo + num; });
     equal(sum, 6, 'default initial value');
 
-    var prod = _.reduce([1, 2, 3, 4], function(prod, num){ return prod * num; });
+    var prod = _.reduce([1, 2, 3, 4], function(memo, num){ return memo * num; });
     equal(prod, 24, 'can reduce via multiplication');
 
     ok(_.reduce(null, _.noop, 138) === 138, 'handles a null (with initial value) properly');
-    equal(_.reduce([], _.noop, undefined), undefined, 'undefined can be passed as a special case');
+    equal(_.reduce([], _.noop, void 0), void 0, 'undefined can be passed as a special case');
     equal(_.reduce([_], _.noop), _, 'collection of length one with no initial value returns the first item');
-
-    throws(function() { _.reduce([], _.noop); }, TypeError, 'throws an error for empty arrays with no initial value');
-    throws(function() {_.reduce(null, _.noop);}, TypeError, 'handles a null (without initial value) properly');
+    equal(_.reduce([], _.noop), void 0, 'returns undefined when collection is empty and no initial value');
   });
 
   test('foldl', function() {
@@ -138,47 +212,45 @@
     list = _.reduceRight(['foo', 'bar', 'baz'], function(memo, str){ return memo + str; });
     equal(list, 'bazbarfoo', 'default initial value');
 
-    var sum = _.reduceRight({a: 1, b: 2, c: 3}, function(sum, num){ return sum + num; });
+    var sum = _.reduceRight({a: 1, b: 2, c: 3}, function(memo, num){ return memo + num; });
     equal(sum, 6, 'default initial value on object');
 
     ok(_.reduceRight(null, _.noop, 138) === 138, 'handles a null (with initial value) properly');
     equal(_.reduceRight([_], _.noop), _, 'collection of length one with no initial value returns the first item');
 
-    equal(_.reduceRight([], _.noop, undefined), undefined, 'undefined can be passed as a special case');
-
-    throws(function() { _.reduceRight([], _.noop); }, TypeError, 'throws an error for empty arrays with no initial value');
-    throws(function() {_.reduceRight(null, _.noop);}, TypeError, 'handles a null (without initial value) properly');
+    equal(_.reduceRight([], _.noop, void 0), void 0, 'undefined can be passed as a special case');
+    equal(_.reduceRight([], _.noop), void 0, 'returns undefined when collection is empty and no initial value');
 
     // Assert that the correct arguments are being passed.
 
     var args,
-        memo = {},
+        init = {},
         object = {a: 1, b: 2},
         lastKey = _.keys(object).pop();
 
     var expected = lastKey === 'a'
-      ? [memo, 1, 'a', object]
-      : [memo, 2, 'b', object];
+      ? [init, 1, 'a', object]
+      : [init, 2, 'b', object];
 
     _.reduceRight(object, function() {
       if (!args) args = _.toArray(arguments);
-    }, memo);
+    }, init);
 
     deepEqual(args, expected);
 
     // And again, with numeric keys.
 
-    object = {'2': 'a', '1': 'b'};
+    object = {2: 'a', 1: 'b'};
     lastKey = _.keys(object).pop();
     args = null;
 
     expected = lastKey === '2'
-      ? [memo, 'a', '2', object]
-      : [memo, 'b', '1', object];
+      ? [init, 'a', '2', object]
+      : [init, 'b', '1', object];
 
     _.reduceRight(object, function() {
       if (!args) args = _.toArray(arguments);
-    }, memo);
+    }, init);
 
     deepEqual(args, expected);
   });
@@ -218,9 +290,9 @@
       return x.x === 4;
     }), {x: 4, z: 1});
 
-    _.findIndex([{a: 1}], function(a, key, obj) {
+    _.findIndex([{a: 1}], function(a, key, o) {
       equal(key, 0);
-      deepEqual(obj, [{a: 1}]);
+      deepEqual(o, [{a: 1}]);
       strictEqual(this, _, 'called with context');
     }, _);
   });
@@ -284,7 +356,7 @@
     ok(!_.every([0, 11, 28], function(num){ return num % 2 === 0; }), 'an odd number');
     ok(_.every([1], _.identity) === true, 'cast to boolean - true');
     ok(_.every([0], _.identity) === false, 'cast to boolean - false');
-    ok(!_.every([undefined, undefined, undefined], _.identity), 'works with arrays of undefined');
+    ok(!_.every([void 0, void 0, void 0], _.identity), 'works with arrays of undefined');
 
     var list = [{a: 1, b: 2}, {a: 2, b: 2}, {a: 1, b: 3}, {a: 1, b: 4}];
     ok(!_.every(list, {a: 1, b: 2}), 'Can be called with object');
@@ -334,22 +406,68 @@
     strictEqual(_.any, _.some, 'alias for any');
   });
 
-  test('contains', function() {
-    ok(_.contains([1, 2, 3], 2), 'two is in the array');
-    ok(!_.contains([1, 3, 9], 2), 'two is not in the array');
-    ok(_.contains({moe: 1, larry: 3, curly: 9}, 3) === true, '_.contains on objects checks their values');
-    ok(_([1, 2, 3]).contains(2), 'OO-style contains');
+  test('includes', function() {
+    _.each([null, void 0, 0, 1, NaN, {}, []], function(val) {
+      strictEqual(_.includes(val, 'hasOwnProperty'), false);
+    });
+    strictEqual(_.includes([1, 2, 3], 2), true, 'two is in the array');
+    ok(!_.includes([1, 3, 9], 2), 'two is not in the array');
+
+    strictEqual(_.includes([5, 4, 3, 2, 1], 5, true), true, 'doesn\'t delegate to binary search');
+
+    ok(_.includes({moe: 1, larry: 3, curly: 9}, 3) === true, '_.includes on objects checks their values');
+    ok(_([1, 2, 3]).includes(2), 'OO-style includes');
   });
 
   test('include', function() {
-    strictEqual(_.contains, _.include, 'alias for contains');
+    strictEqual(_.includes, _.include, 'alias for includes');
   });
 
-  test('invoke', function() {
+  test('contains', function() {
+    strictEqual(_.includes, _.contains, 'alias for includes');
+
+    var numbers = [1, 2, 3, 1, 2, 3, 1, 2, 3];
+    strictEqual(_.includes(numbers, 1, 1), true, 'contains takes a fromIndex');
+    strictEqual(_.includes(numbers, 1, -1), false, 'contains takes a fromIndex');
+    strictEqual(_.includes(numbers, 1, -2), false, 'contains takes a fromIndex');
+    strictEqual(_.includes(numbers, 1, -3), true, 'contains takes a fromIndex');
+    strictEqual(_.includes(numbers, 1, 6), true, 'contains takes a fromIndex');
+    strictEqual(_.includes(numbers, 1, 7), false, 'contains takes a fromIndex');
+
+    ok(_.every([1, 2, 3], _.partial(_.contains, numbers)), 'fromIndex is guarded');
+  });
+
+  test('includes with NaN', function() {
+    strictEqual(_.includes([1, 2, NaN, NaN], NaN), true, 'Expected [1, 2, NaN] to contain NaN');
+    strictEqual(_.includes([1, 2, Infinity], NaN), false, 'Expected [1, 2, NaN] to contain NaN');
+  });
+
+  test('includes with +- 0', function() {
+    _.each([-0, +0], function(val) {
+      strictEqual(_.includes([1, 2, val, val], val), true);
+      strictEqual(_.includes([1, 2, val, val], -val), true);
+      strictEqual(_.includes([-1, 1, 2], -val), false);
+    });
+  });
+
+
+  test('invoke', 5, function() {
     var list = [[5, 1, 7], [3, 2, 1]];
     var result = _.invoke(list, 'sort');
     deepEqual(result[0], [1, 5, 7], 'first array sorted');
     deepEqual(result[1], [1, 2, 3], 'second array sorted');
+
+    _.invoke([{
+      method: function() {
+        deepEqual(_.toArray(arguments), [1, 2, 3], 'called with arguments');
+      }
+    }], 'method', 1, 2, 3);
+
+    deepEqual(_.invoke([{a: null}, {}, {a: _.constant(1)}], 'a'), [null, void 0, 1], 'handles null & undefined');
+
+    throws(function() {
+      _.invoke([{a: 1}], 'a');
+    }, TypeError, 'throws for non-functions');
   });
 
   test('invoke w/ function reference', function() {
@@ -357,6 +475,10 @@
     var result = _.invoke(list, Array.prototype.sort);
     deepEqual(result[0], [1, 5, 7], 'first array sorted');
     deepEqual(result[1], [1, 2, 3], 'second array sorted');
+
+    deepEqual(_.invoke([1, 2, 3], function(a) {
+      return a + this;
+    }, 5), [6, 7, 8], 'receives params from invoke');
   });
 
   // Relevant when using ClojureScript
@@ -371,12 +493,13 @@
     deepEqual(result[0], [1, 5, 7], 'first array sorted');
     deepEqual(result[1], [1, 2, 3], 'second array sorted');
     delete String.prototype.call;
-    equal(s.call, undefined, 'call function removed');
+    equal(s.call, void 0, 'call function removed');
   });
 
   test('pluck', function() {
     var people = [{name: 'moe', age: 30}, {name: 'curly', age: 50}];
     deepEqual(_.pluck(people, 'name'), ['moe', 'curly'], 'pulls names out of objects');
+    deepEqual(_.pluck(people, 'address'), [void 0, void 0], 'missing properties are returned as undefined');
     //compat: most flexible handling of edge cases
     deepEqual(_.pluck([{'[object Object]': 1}], {}), [1]);
   });
@@ -424,7 +547,7 @@
 
   test('max', function() {
     equal(-Infinity, _.max(null), 'can handle null/undefined');
-    equal(-Infinity, _.max(undefined), 'can handle null/undefined');
+    equal(-Infinity, _.max(void 0), 'can handle null/undefined');
     equal(-Infinity, _.max(null, _.identity), 'can handle null/undefined');
 
     equal(3, _.max([1, 2, 3]), 'can perform a regular Math.max');
@@ -434,7 +557,7 @@
 
     equal(-Infinity, _.max({}), 'Maximum value of an empty object');
     equal(-Infinity, _.max([]), 'Maximum value of an empty array');
-    equal(_.max({'a': 'a'}), -Infinity, 'Maximum value of a non-numeric collection');
+    equal(_.max({a: 'a'}), -Infinity, 'Maximum value of a non-numeric collection');
 
     equal(299999, _.max(_.range(1, 300000)), 'Maximum value of a too-big array');
 
@@ -446,16 +569,16 @@
     var iterator = function(o){ return o.x; };
     equal(_.max([a, b], iterator), a, 'Respects iterator return value of -Infinity');
 
-    deepEqual(_.max([{'a': 1}, {'a': 0, 'b': 3}, {'a': 4}, {'a': 2}], 'a'), {'a': 4}, 'String keys use property iterator');
+    deepEqual(_.max([{a: 1}, {a: 0, b: 3}, {a: 4}, {a: 2}], 'a'), {a: 4}, 'String keys use property iterator');
 
-    deepEqual(_.max([0, 2], function(a){ return a * this.x; }, {x: 1}), 2, 'Iterator context');
+    deepEqual(_.max([0, 2], function(c){ return c * this.x; }, {x: 1}), 2, 'Iterator context');
     deepEqual(_.max([[1], [2, 3], [-1, 4], [5]], 0), [5], 'Lookup falsy iterator');
     deepEqual(_.max([{0: 1}, {0: 2}, {0: -1}, {a: 1}], 0), {0: 2}, 'Lookup falsy iterator');
   });
 
   test('min', function() {
     equal(Infinity, _.min(null), 'can handle null/undefined');
-    equal(Infinity, _.min(undefined), 'can handle null/undefined');
+    equal(Infinity, _.min(void 0), 'can handle null/undefined');
     equal(Infinity, _.min(null, _.identity), 'can handle null/undefined');
 
     equal(1, _.min([1, 2, 3]), 'can perform a regular Math.min');
@@ -465,7 +588,7 @@
 
     equal(Infinity, _.min({}), 'Minimum value of an empty object');
     equal(Infinity, _.min([]), 'Minimum value of an empty array');
-    equal(_.min({'a': 'a'}), Infinity, 'Minimum value of a non-numeric collection');
+    equal(_.min({a: 'a'}), Infinity, 'Minimum value of a non-numeric collection');
 
     var now = new Date(9999999999);
     var then = new Date(0);
@@ -481,20 +604,20 @@
     var iterator = function(o){ return o.x; };
     equal(_.min([a, b], iterator), a, 'Respects iterator return value of Infinity');
 
-    deepEqual(_.min([{'a': 1}, {'a': 0, 'b': 3}, {'a': 4}, {'a': 2}], 'a'), {'a': 0, 'b': 3}, 'String keys use property iterator');
+    deepEqual(_.min([{a: 1}, {a: 0, b: 3}, {a: 4}, {a: 2}], 'a'), {a: 0, b: 3}, 'String keys use property iterator');
 
-    deepEqual(_.min([0, 2], function(a){ return a * this.x; }, {x: -1}), 2, 'Iterator context');
+    deepEqual(_.min([0, 2], function(c){ return c * this.x; }, {x: -1}), 2, 'Iterator context');
     deepEqual(_.min([[1], [2, 3], [-1, 4], [5]], 0), [-1, 4], 'Lookup falsy iterator');
     deepEqual(_.min([{0: 1}, {0: 2}, {0: -1}, {a: 1}], 0), {0: -1}, 'Lookup falsy iterator');
   });
 
   test('sortBy', function() {
-    var people = [{name : 'curly', age : 50}, {name : 'moe', age : 30}];
+    var people = [{name: 'curly', age: 50}, {name: 'moe', age: 30}];
     people = _.sortBy(people, function(person){ return person.age; });
     deepEqual(_.pluck(people, 'name'), ['moe', 'curly'], 'stooges sorted by age');
 
-    var list = [undefined, 4, 1, undefined, 3, 2];
-    deepEqual(_.sortBy(list, _.identity), [1, 2, 3, 4, undefined, undefined], 'sortBy with undefined values');
+    var list = [void 0, 4, 1, void 0, 3, 2];
+    deepEqual(_.sortBy(list, _.identity), [1, 2, 3, 4, void 0, void 0], 'sortBy with undefined values');
 
     list = ['one', 'two', 'three', 'four', 'five'];
     var sorted = _.sortBy(list, 'length');
@@ -512,9 +635,9 @@
       new Pair(2, 1), new Pair(2, 2),
       new Pair(2, 3), new Pair(2, 4),
       new Pair(2, 5), new Pair(2, 6),
-      new Pair(undefined, 1), new Pair(undefined, 2),
-      new Pair(undefined, 3), new Pair(undefined, 4),
-      new Pair(undefined, 5), new Pair(undefined, 6)
+      new Pair(void 0, 1), new Pair(void 0, 2),
+      new Pair(void 0, 3), new Pair(void 0, 4),
+      new Pair(void 0, 5), new Pair(void 0, 6)
     ];
 
     var actual = _.sortBy(collection, function(pair) {
@@ -613,31 +736,13 @@
     equal(grouped['3'], 1);
   });
 
-  test('sortedIndex', function() {
-    var numbers = [10, 20, 30, 40, 50], num = 35;
-    var indexForNum = _.sortedIndex(numbers, num);
-    equal(indexForNum, 3, '35 should be inserted at index 3');
-
-    var indexFor30 = _.sortedIndex(numbers, 30);
-    equal(indexFor30, 2, '30 should be inserted at index 2');
-
-    var objects = [{x: 10}, {x: 20}, {x: 30}, {x: 40}];
-    var iterator = function(obj){ return obj.x; };
-    strictEqual(_.sortedIndex(objects, {x: 25}, iterator), 2);
-    strictEqual(_.sortedIndex(objects, {x: 35}, 'x'), 3);
-
-    var context = {1: 2, 2: 3, 3: 4};
-    iterator = function(obj){ return this[obj]; };
-    strictEqual(_.sortedIndex([1, 3], 2, iterator, context), 1);
-  });
-
   test('shuffle', function() {
-    var numbers = _.range(10);
+    deepEqual(_.shuffle([1]), [1], 'behaves correctly on size 1 arrays');
+    var numbers = _.range(20);
     var shuffled = _.shuffle(numbers);
+    notDeepEqual(numbers, shuffled, 'does change the order'); // Chance of false negative: 1 in ~2.4*10^18
     notStrictEqual(numbers, shuffled, 'original object is unmodified');
-    ok(_.every(_.range(10), function() { //appears consistent?
-      return _.every(numbers, _.partial(_.contains, numbers));
-    }), 'contains the same members before and after shuffle');
+    deepEqual(numbers, _.sortBy(shuffled), 'contains the same members before and after shuffle');
 
     shuffled = _.shuffle({a: 1, b: 2, c: 3, d: 4});
     equal(shuffled.length, 4);
@@ -645,17 +750,22 @@
   });
 
   test('sample', function() {
+    strictEqual(_.sample([1]), 1, 'behaves correctly when no second parameter is given');
+    deepEqual(_.sample([1, 2, 3], -2), [], 'behaves correctly on negative n');
     var numbers = _.range(10);
     var allSampled = _.sample(numbers, 10).sort();
     deepEqual(allSampled, numbers, 'contains the same members before and after sample');
     allSampled = _.sample(numbers, 20).sort();
     deepEqual(allSampled, numbers, 'also works when sampling more objects than are present');
     ok(_.contains(numbers, _.sample(numbers)), 'sampling a single element returns something from the array');
-    strictEqual(_.sample([]), undefined, 'sampling empty array with no number returns undefined');
+    strictEqual(_.sample([]), void 0, 'sampling empty array with no number returns undefined');
     notStrictEqual(_.sample([], 5), [], 'sampling empty array with a number returns an empty array');
     notStrictEqual(_.sample([1, 2, 3], 0), [], 'sampling an array with 0 picks returns an empty array');
     deepEqual(_.sample([1, 2], -1), [], 'sampling a negative number of picks returns an empty array');
     ok(_.contains([1, 2, 3], _.sample({a: 1, b: 2, c: 3})), 'sample one value from an object');
+    var partialSample = _.sample(_.range(1000), 10);
+    var partialSampleSorted = partialSample.sort();
+    notDeepEqual(partialSampleSorted, _.range(10), 'samples from the whole array, not just the beginning');
   });
 
   test('toArray', function() {
@@ -665,7 +775,7 @@
     ok(_.toArray(a) !== a, 'array is cloned');
     deepEqual(_.toArray(a), [1, 2, 3], 'cloned array contains same elements');
 
-    var numbers = _.toArray({one : 1, two : 2, three : 3});
+    var numbers = _.toArray({one: 1, two: 2, three: 3});
     deepEqual(numbers, [1, 2, 3], 'object flattened into array');
 
     if (typeof document != 'undefined') {
@@ -673,13 +783,13 @@
       var actual;
       try {
         actual = _.toArray(document.childNodes);
-      } catch(ex) { }
+      } catch(e) { /* ignored */ }
       deepEqual(actual, _.map(document.childNodes, _.identity), 'works on NodeList');
     }
   });
 
   test('size', function() {
-    equal(_.size({one : 1, two : 2, three : 3}), 3, 'can compute the size of an object');
+    equal(_.size({one: 1, two: 2, three: 3}), 3, 'can compute the size of an object');
     equal(_.size([1, 2, 3]), 3, 'can compute the size of an array');
     equal(_.size({length: 3, 0: 0, 1: 0, 2: 0}), 3, 'can compute the size of Array-likes');
 
@@ -693,6 +803,7 @@
     equal(_.size(new String('hello')), 5, 'can compute the size of string object');
 
     equal(_.size(null), 0, 'handles nulls');
+    equal(_.size(0), 0, 'handles numbers');
   });
 
   test('partition', function() {
@@ -728,23 +839,23 @@
 
   if (typeof document != 'undefined') {
     test('Can use various collection methods on NodeLists', function() {
-        var parent = document.createElement('div');
-        parent.innerHTML = '<span id=id1></span>textnode<span id=id2></span>';
+      var parent = document.createElement('div');
+      parent.innerHTML = '<span id=id1></span>textnode<span id=id2></span>';
 
-        var elementChildren = _.filter(parent.childNodes, _.isElement);
-        equal(elementChildren.length, 2);
+      var elementChildren = _.filter(parent.childNodes, _.isElement);
+      equal(elementChildren.length, 2);
 
-        deepEqual(_.map(elementChildren, 'id'), ['id1', 'id2']);
-        deepEqual(_.map(parent.childNodes, 'nodeType'), [1, 3, 1]);
+      deepEqual(_.map(elementChildren, 'id'), ['id1', 'id2']);
+      deepEqual(_.map(parent.childNodes, 'nodeType'), [1, 3, 1]);
 
-        ok(!_.every(parent.childNodes, _.isElement));
-        ok(_.some(parent.childNodes, _.isElement));
+      ok(!_.every(parent.childNodes, _.isElement));
+      ok(_.some(parent.childNodes, _.isElement));
 
-        function compareNode(node) {
-          return _.isElement(node) ? node.id.charAt(2) : void 0;
-        }
-        equal(_.max(parent.childNodes, compareNode), _.last(parent.childNodes));
-        equal(_.min(parent.childNodes, compareNode), _.first(parent.childNodes));
+      function compareNode(node) {
+        return _.isElement(node) ? node.id.charAt(2) : void 0;
+      }
+      equal(_.max(parent.childNodes, compareNode), _.last(parent.childNodes));
+      equal(_.min(parent.childNodes, compareNode), _.first(parent.childNodes));
     });
   }
 

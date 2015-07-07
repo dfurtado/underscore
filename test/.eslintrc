@@ -12,9 +12,12 @@
     "strictEqual": false,
     "notStrictEqual": false,
     "notEqual": false,
+    "notDeepEqual": false,
     "throws": false,
     "asyncTest": false,
-    "start": false
+    "start": false,
+    "expect": false,
+    "QUnit": false
   },
   "rules": {
     "brace-style": 0,
